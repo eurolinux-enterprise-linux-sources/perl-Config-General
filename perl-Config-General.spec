@@ -1,5 +1,5 @@
 Name:           perl-Config-General
-Version:        2.44
+Version:        2.52
 Release:        1%{?dist}
 Summary:        Generic configuration module for Perl
 
@@ -7,11 +7,27 @@ Group:          Development/Libraries
 License:        GPL+ or Artistic
 URL:            http://search.cpan.org/dist/Config-General/
 Source0:        http://www.cpan.org/authors/id/T/TL/TLINDEN/Config-General-%{version}.tar.gz
-Patch0:         %{name}-2.42-system-ixhash.patch
+Patch0:         %{name}-2.52-system-ixhash.patch
 BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
 BuildArch:      noarch
+BuildRequires:  perl
 BuildRequires:  perl(ExtUtils::MakeMaker)
+# Run-time:
+BuildRequires:  perl(base)
+BuildRequires:  perl(Carp)
+BuildRequires:  perl(Carp::Heavy)
+BuildRequires:  perl(English)
+BuildRequires:  perl(Exporter)
+BuildRequires:  perl(File::Glob)
+BuildRequires:  perl(File::Spec::Functions)
+BuildRequires:  perl(FileHandle)
+BuildRequires:  perl(IO::File)
+BuildRequires:  perl(strict)
+BuildRequires:  perl(vars)
+BuildRequires:  perl(warnings)
+# Tests:
+BuildRequires:  perl(Data::Dumper)
 BuildRequires:  perl(Test::More)
 BuildRequires:  perl(Tie::IxHash)
 Requires:  perl(:MODULE_COMPAT_%(eval "`%{__perl} -V:version`"; echo $version))
@@ -36,7 +52,8 @@ support for object oriented access to the configuration.
 %prep
 %setup -q -n Config-General-%{version}
 %patch0 -p1
-rm -r t/Tie
+rm -r t/Tie # see patch0
+sed -i -e '/^t\/Tie/ d' MANIFEST
 f=Changelog ; iconv -f iso-8859-1 -t utf-8 -o $f.utf8 $f ; mv $f.utf8 $f
 
 
@@ -69,6 +86,10 @@ rm -rf $RPM_BUILD_ROOT
 
 
 %changelog
+* Tue Aug 06 2013 Jitka Plesnikova <jplesnik@redhat.com> - 2.52-1
+- 2.52 bump, specify all dependencies
+- Resolves: #658946 - Stop error reporting when config is a directory
+
 * Tue Sep  8 2009 Ville Skyttä <ville.skytta@iki.fi> - 2.44-1
 - Update to 2.44 (#521756).
 - Prune pre-2005 %%changelog entries.
@@ -127,5 +148,5 @@ rm -rf $RPM_BUILD_ROOT
 * Wed May 18 2005 Ville Skyttä <ville.skytta@iki.fi> - 2.28-2
 - 2.28.
 
-* Fri Apr  7 2005 Michael Schwendt <mschwendt[AT]users.sf.net> - 2.27-2
+* Thu Apr  7 2005 Michael Schwendt <mschwendt[AT]users.sf.net> - 2.27-2
 - rebuilt

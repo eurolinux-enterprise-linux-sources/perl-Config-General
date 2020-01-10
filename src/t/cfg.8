@@ -8,13 +8,17 @@
       age  31
   </officer>
 </cops>
+domain  nix.to
 domain	b0fh.org
-domain  l0pht.com
-domain  infonexus.com
+domain  foo.bar
 message <<EOF
   yes. we are not here. you
   can reach us somewhere in
   outerspace.
+EOF
+nocomment <<EOF
+Comments in a here-doc should not be treated as comments.
+/* So this should appear in the output */
 EOF
 command = ssh -f -g orpheus.0x49.org \
           -l azrael -L:34777samir.okir.da.ru:22 \
@@ -37,3 +41,5 @@ host = blah.blubber
 quoted = "this one contains whitespace at the end    "
 
 quotedwithquotes = " holy crap, it contains \"masked quotes\" and 'single quotes'  "
+
+

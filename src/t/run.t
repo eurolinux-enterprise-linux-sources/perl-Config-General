@@ -8,7 +8,7 @@
 
 
 use Data::Dumper;
-use Test::More tests => 51;
+use Test::More tests => 70;
 #use Test::More qw(no_plan);
 
 # ahem, we deliver the test code with a local copy of
@@ -16,7 +16,10 @@ use Test::More tests => 51;
 # hashes without dependency to Tie::IxHash.
 use lib qw(t);
 use Tie::IxHash;
-
+my @WARNINGS_FOUND;
+BEGIN {
+    $SIG{__WARN__} = sub { diag( "WARN: ", join( '', @_ ) ); push @WARNINGS_FOUND, @_ };
+}
 
 ### 1
 BEGIN { use_ok "Config::General"};
@@ -38,8 +41,6 @@ foreach my $num (2..7) {
   ok(!$@, "$fst");
 }
 
-
-
 ### 8
 my $conf = new Config::General("t/cfg.8");
 my %hash = $conf->getall;
@@ -48,6 +49,8 @@ my $copy = new Config::General("t/cfg.out");
 my %copyhash = $copy->getall;
 is_deeply(\%hash, \%copyhash, "Writing Config Hash to disk and compare with original");
 
+# 8a
+like($copyhash{nocomment}, qr/this should appear/, "C-comments not processed in here-doc");
 
 ### 9
 $conf = new Config::General(
@@ -435,12 +438,19 @@ is_deeply( \%C36, { bit => { one => { honk=>'bonk' },
 
 
 ### Include once
-diag "\nPlease ignore the following message about IncludeAgain";
-my $conf37 = Config::General->new( "t/dual-include.conf" );
-my %C37 = $conf37->getall;
-is_deeply( \%C37, { bit => { one => { honk=>'bonk' }, 
-                           two => {} 
-                }        }, "Included once-only" );
+{
+    my @expected_warning;
+    local $SIG{__WARN__} = sub { push @expected_warning, @_};
+
+    my $conf37 = Config::General->new( "t/dual-include.conf" );
+    my %C37 = $conf37->getall;
+    is_deeply( \%C37, { bit => { one => { honk=>'bonk' }, 
+				 two => {} 
+			}        }, "Included once-only" );
+
+    is( @expected_warning, 1, "1 Expected warning" );
+    like( $expected_warning[0], qr/File .* already loaded.  Use -IncludeAgain to load it again./ms, "Warns about a file already being loaded" );
+}
 
 
 ### apache-style Include 
@@ -508,6 +518,9 @@ my $expect46 = {
 is_deeply($expect46, \%conf46, "Variables inside single quotes");
 
 
+
+
+
 # complexity test
 # check the combination of various features
 my $conf47 = new Config::General(
@@ -549,7 +562,7 @@ my $expect47 = {
                  },
           'onflag' => 1,
           'var2' => 'zeppelin',
-          'ignore' => '\\$set',
+          'ignore' => '$set', # escaped $ should get to plain $, not \\$!
           'quote' => 'this should be \'kept: $set\' and not be \'$set!\'',
           'x5' => {
                     'klack' => '11111'
@@ -614,7 +627,7 @@ my $expect47 = {
   work
   too!'
 };
-
+#scip
 is_deeply($expect47, \%conf47, "complexity test");
 
 # check if sorted save works
@@ -650,3 +663,77 @@ my $cfg48 = new Config::General(
 %hash48 = $cfg48->getall();
 my $str48 = $cfg48->save_string(\%hash48);
 is( $str48, $ostr48, "tied hash test");
+
+
+
+# check for undef and -w
+{
+my $ostr49 = "foo\n";
+local $^W = 1;
+my $cfg49 =  new Config::General( -String => $ostr49 );
+my %hash49 = $cfg49->getall();
+ok( exists $hash49{foo}, "value for undefined key found");
+is( $hash49{foo}, undef, "value returned as expected - undef");
+
+# repeat with interpolation turned on
+$cfg49 =  new Config::General( -String => $ostr49, -InterPolateVars => 1 );
+%hash49 = $cfg49->getall();
+ok( exists $hash49{foo}, "value for undefined key found");
+is( $hash49{foo}, undef, "value returned as expected - undef");
+$^W = 0;
+}
+
+
+# verifies bug fix rt#54580
+# Test handling of values containing *many* single-quoted strings
+# when -InterPolateVars option is set
+my $dupcount50 = 2000;
+my $ostr50;
+foreach my $counter ( reverse 1 .. $dupcount50 ) {
+  $ostr50 .= " 'luck${counter}'";
+}
+$ostr50 =~ s{\A }{};
+my $cfgsrc50 = 'test_single_many ' . $ostr50;
+$cfg50 =  new Config::General( -String => $cfgsrc50, -InterPolateVars => 1 );
+%hash50 = $cfg50->getall();
+is($hash50{test_single_many}, $ostr50, "value with single-quote strings is as expected" );
+
+
+# check for escaped chars
+my $cfg51  =  new Config::General( -ConfigFile => "t/cfg.51" );
+my %hash51 = $cfg51->getall();
+is($hash51{dollar},    '$foo',                 "keep escaped dollar character");
+is($hash51{backslash}, 'contains \ backslash', "keep escaped backslash character");
+is($hash51{prize},     '18 $',                 "keep un-escaped dollar character");
+is($hash51{hostparam}, q("'wsh.dir'"),         "keep escaped quote character");
+is($hash51{bgcolor},   '#fff',                 "keep escaped number sign");
+
+# now save it to a file and re-read it in and see if everything remains escaped
+$cfg51->save_file("t/cfg.51.out");
+$cfg51  =  new Config::General( -ConfigFile => "t/cfg.51.out", -InterPolateVars => 1 );
+my %hash51new = $cfg51->getall();
+is_deeply(\%hash51, \%hash51new, "compare saved config containing escaped chars");
+
+
+# check if forced single value arrays remain
+my $cfg52  = new Config::General( -String => "habeas = [ corpus ]", -ForceArray => 1);
+my %hash52 = $cfg52->getall();
+my @array52 = qw(corpus);
+is_deeply($hash52{habeas}, \@array52, "check -ForceArray single value arrays");
+$cfg52->save_file("t/cfg.52.out");
+$cfg52 = new Config::General( -ConfigFile => "t/cfg.52.out", -ForceArray => 1);
+my %hash52new = $cfg52->getall();
+is_deeply(\%hash52new, \%hash52, "check -ForceArray single value arrays during save()");
+
+my $cfg53 = new Config::General(-AllowSingleQuoteInterpolation => 1, -String => "got = 1\nhave = '\$got'", -InterPolateVars => 1 );
+my %hash53 = $cfg53->getall();
+is($hash53{have}, "'1'", "check -AllowSingleQuoteInterpolation");
+
+
+# Make sure no warnings were seen during the test.
+ok( !@WARNINGS_FOUND, "No unexpected warnings seen" );
+
+# check if disabling escape chars does work
+my $cfg54 = new Config::General(-NoEscape => 1, -String => qq(val = \\\$notavar:\\blah\n));
+my %hash54 = $cfg54->getall();
+is($hash54{val}, qq(\\\$notavar:\\blah), "check -NoEscape");

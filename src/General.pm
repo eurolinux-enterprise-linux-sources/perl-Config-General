@@ -5,9 +5,9 @@
 #          config values from a given file and
 #          return it as hash structure
 #
-# Copyright (c) 2000-2009 Thomas Linden <tlinden |AT| cpan.org>.
+# Copyright (c) 2000-2013 Thomas Linden <tlinden |AT| cpan.org>.
 # All Rights Reserved. Std. disclaimer applies.
-# Artificial License, same as perl itself. Have fun.
+# Artistic License, same as perl itself. Have fun.
 #
 # namespace
 package Config::General;
@@ -25,14 +25,14 @@ use File::Glob qw/:glob/;
 # on debian with perl > 5.8.4 croak() doesn't work anymore without this.
 # There is some require statement which dies 'cause it can't find Carp::Heavy,
 # I really don't understand, what the hell they made, but the debian perl
-# installation is definetly bullshit, damn!
+# installation is definitely bullshit, damn!
 use Carp::Heavy;
 
 
 use Carp;
 use Exporter;
 
-$Config::General::VERSION = 2.44;
+$Config::General::VERSION = "2.52";
 
 use vars  qw(@ISA @EXPORT_OK);
 use base qw(Exporter);
@@ -79,14 +79,21 @@ sub new {
 	      SplitDelimiter        => 0,       # must be set by the user if SplitPolicy is 'custom'
 	      StoreDelimiter        => 0,       # will be set by me unless user uses 'custom' policy
 	      CComments             => 1,       # by default turned on
-	      BackslashEscape       => 0,       # by default turned off, allows escaping anything using  the backslash
+	      BackslashEscape       => 0,       # deprecated
 	      StrictObjects         => 1,       # be strict on non-existent keys in OOP mode
 	      StrictVars            => 1,       # be strict on undefined variables in Interpolate mode
 	      Tie                   => q(),      # could be set to a perl module for tie'ing new hashes
 	      parsed                => 0,       # internal state stuff for variable interpolation
 	      files                 => {},      # which files we have read, if any
 	      UTF8                  => 0,
-	      SaveSorted            => 0
+	      SaveSorted            => 0,
+              ForceArray            => 0,       # force single value array if value enclosed in []
+              AllowSingleQuoteInterpolation => 0,
+              NoEscape              => 0,
+              NormalizeBlock        => 0,
+              NormalizeOption       => 0,
+              NormalizeValue        => 0,
+              Plug                  => {}
 	     };
 
   # create the class instance
@@ -112,7 +119,7 @@ sub new {
   # find split policy to use for option/value separation
   $self->_splitpolicy();
 
-  # bless into variable interpolation module if neccessary
+  # bless into variable interpolation module if necessary
   $self->_blessvars();
 
   # process as usual
@@ -165,7 +172,7 @@ sub _process {
       # open the file and read the contents in
       $self->{configfile} = $self->{ConfigFile};
       if ( file_name_is_absolute($self->{ConfigFile}) ) {
-	# look if is is an absolute path and save the basename if it is absolute
+	# look if this is an absolute path and save the basename if it is absolute
 	my ($volume, $path, undef) = splitpath($self->{ConfigFile});
 	$path =~ s#/$##; # remove eventually existing trailing slash
 	if (! $self->{ConfigPath}) {
@@ -174,7 +181,7 @@ sub _process {
 	unshift @{$self->{ConfigPath}}, catpath($volume, $path, q());
       }
       $self->_open($self->{configfile});
-      # now, we parse immdediately, getall simply returns the whole hash
+      # now, we parse immediately, getall simply returns the whole hash
       $self->{config} = $self->_hashref();
       $self->{config} = $self->_parse($self->{DefaultConfig}, $self->{content});
     }
@@ -189,11 +196,11 @@ sub _process {
 
 sub _blessoop {
   #
-  # bless into ::Extended if neccessary
+  # bless into ::Extended if necessary
   my($self) = @_;
   if ($self->{ExtendedAccess}) {
     # we are blessing here again, to get into the ::Extended namespace
-    # for inheriting the methods available overthere, which we doesn't have.
+    # for inheriting the methods available over there, which we doesn't have.
     bless $self, 'Config::General::Extended';
     eval {
       require Config::General::Extended;
@@ -207,7 +214,7 @@ sub _blessoop {
 
 sub _blessvars {
   #
-  # bless into ::Interpolated if neccessary
+  # bless into ::Interpolated if necessary
   my($self) = @_;
   if ($self->{InterPolateVars} || $self->{InterPolateEnv}) {
     # InterPolateEnv implies InterPolateVars
@@ -377,7 +384,6 @@ sub _prepare {
     $self->{SlashIsDirectory}   = 1;
     $self->{SplitPolicy}        = 'whitespace';
     $self->{CComments}          = 0;
-    $self->{BackslashEscape}    = 1;
   }
 }
 
@@ -404,6 +410,11 @@ sub _open {
   # open the config file, or expand a directory or glob
   #
   my($this, $basefile, $basepath) = @_;
+  my $cont;
+
+  ($cont, $basefile, $basepath) = $this->_hook('pre_open', $basefile, $basepath);
+  return if(!$cont);
+
   my($fh, $configfile);
 
   if($basepath) {
@@ -436,7 +447,7 @@ sub _open {
     else {
       # Multiple results or no expansion results (which is fine,
       # include foo/* shouldn't fail if there isn't anything matching)
-      local $this->{IncludeGlob};
+      # rt.cpan.org#79869: local $this->{IncludeGlob};
       for (@include) {
 	$this->_open($_);
       }
@@ -480,7 +491,7 @@ sub _open {
       if (! exists $this->{files}->{$file} or $this->{IncludeAgain} ) {
         # support re-read if used urged us to do so, otherwise ignore the file
 	if ($this->{UTF8}) {
-	  $fh = new IO::File;
+	  $fh = IO::File->new;
 	  open( $fh, "<:utf8", $file)
 	    or croak "Config::General: Could not open $file in UTF8 mode!($!)\n";
 	}
@@ -495,6 +506,9 @@ sub _open {
       }
     }
   }
+  elsif (-d $configfile) {
+    croak "Config::General: config file argument is a directory, expecting a file!\n";
+  }
   elsif (-e _) {
     if (exists $this->{files}->{$configfile} and not $this->{IncludeAgain}) {
       # do not read the same file twice, just return
@@ -503,7 +517,7 @@ sub _open {
     }
     else {
       if ($this->{UTF8}) {
-	$fh = new IO::File;
+	$fh = IO::File->new;
 	open( $fh, "<:utf8", $configfile)
 	  or croak "Config::General: Could not open $configfile in UTF8 mode!($!)\n";
       }
@@ -531,6 +545,8 @@ sub _read {
   # (comments, continuing lines, and stuff)
   #
   my($this, $fh, $flag) = @_;
+
+
   my(@stuff, @content, $c_comment, $longline, $hier, $hierend, @hierdoc);
   local $_ = q();
 
@@ -546,6 +562,10 @@ sub _read {
     @stuff = <$fh>;
   }
 
+  my $cont;
+  ($cont, $fh, @stuff) = $this->_hook('pre_read', $fh, @stuff);
+  return if(!$cont);
+
   foreach (@stuff) {
     if ($this->{AutoLaunder}) {
       if (m/^(.*)$/) {
@@ -554,32 +574,6 @@ sub _read {
     }
 
     chomp;
-
-    if ($this->{CComments}) {
-      # look for C-Style comments, if activated
-      if (/(\s*\/\*.*\*\/\s*)/) {
-	# single c-comment on one line
-	s/\s*\/\*.*\*\/\s*//;
-      }
-      elsif (/^\s*\/\*/) {
-	# the beginning of a C-comment ("/*"), from now on ignore everything.
-	if (/\*\/\s*$/) {
-	  # C-comment end is already there, so just ignore this line!
-	  $c_comment = 0;
-	}
-	else {
-	  $c_comment = 1;
-	}
-      }
-      elsif (/\*\//) {
-	if (!$c_comment) {
-	  warn "invalid syntax: found end of C-comment without previous start!\n";
-	}
-	$c_comment = 0;    # the current C-comment ends here, go on
-	s/^.*\*\///;       # if there is still stuff, it will be read
-      }
-      next if($c_comment); # ignore EVERYTHING from now on, IF it IS a C-Comment
-    }
 
 
     if ($hier) {
@@ -609,9 +603,31 @@ sub _read {
       next;
     }
 
-    ###
-    ### non-heredoc entries from now on
-    ##
+    if ($this->{CComments}) {
+      # look for C-Style comments, if activated
+      if (/(\s*\/\*.*\*\/\s*)/) {
+       # single c-comment on one line
+       s/\s*\/\*.*\*\/\s*//;
+      }
+      elsif (/^\s*\/\*/) {
+       # the beginning of a C-comment ("/*"), from now on ignore everything.
+       if (/\*\/\s*$/) {
+         # C-comment end is already there, so just ignore this line!
+         $c_comment = 0;
+       }
+       else {
+         $c_comment = 1;
+       }
+      }
+      elsif (/\*\//) {
+       if (!$c_comment) {
+         warn "invalid syntax: found end of C-comment without previous start!\n";
+       }
+       $c_comment = 0;    # the current C-comment ends here, go on
+       s/^.*\*\///;       # if there is still stuff, it will be read
+      }
+      next if($c_comment); # ignore EVERYTHING from now on, IF it IS a C-Comment
+    }
 
     # Remove comments and empty lines
     s/(?<!\\)#.*$//; # .+ => .* bugfix rt.cpan.org#44600
@@ -620,27 +636,16 @@ sub _read {
 
 
     # look for multiline option, indicated by a trailing backslash
-    my $extra = $this->{BackslashEscape} ? '(?<!\\\\)' : q();
-    if (/$extra\\$/) {
+    if (/(?<!\\)\\$/) {
       chop;
       s/^\s*//;
       $longline .= $_;
       next;
     }
 
-    # remove the \ from all characters if BackslashEscape is turned on
-    # FIXME (rt.cpan.org#33218
-    if ($this->{BackslashEscape}) {
-      s/\\(.)/$1/g;
-    }
-    else {
-      # remove the \ char in front of masked "#", if any
-      s/\\#/#/g;
-    }
-
-
     # transform explicit-empty blocks to conforming blocks
-    if (!$this->{ApacheCompatible} && /\s*<([^\/]+?.*?)\/>$/) {
+    # rt.cpan.org#80006 added \s* before $/
+    if (!$this->{ApacheCompatible} && /\s*<([^\/]+?.*?)\/>\s*$/) {
       my $block = $1;
       if ($block !~ /\"/) {
 	if ($block !~ /\s[^\s]/) {
@@ -745,6 +750,8 @@ sub _read {
     }
 
   }
+
+  ($cont, $this->{content}) = $this->_hook('post_read', $this->{content});
   return 1;
 }
 
@@ -786,6 +793,10 @@ sub _parse {
       }
     }
 
+    if($this->{NormalizeOption}) {
+      $option = $this->{NormalizeOption}($option);
+    }
+
     if ($value && $value =~ /^"/ && $value =~ /"$/) {
       $value =~ s/^"//;                                    # remove leading and trailing "
       $value =~ s/"$//;
@@ -804,6 +815,16 @@ sub _parse {
 	    $blockname = $3 || $4;
 	  }
 	}
+        if($this->{NormalizeBlock}) {
+          $block = $this->{NormalizeBlock}($block);
+	  if (defined $blockname) {
+            $blockname = $this->{NormalizeBlock}($blockname);
+            if($blockname eq "") {
+              # if, after normalization no blockname is left, remove it
+              $blockname = undef;
+            }
+	  }
+        }
 	if ($this->{InterPolateVars}) {
 	  # interpolate block(name), add "<" and ">" to the key, because
 	  # it is sure that such keys does not exist otherwise.
@@ -864,13 +885,19 @@ sub _parse {
 	  }
 	}
 	else {
-	  # standard config option, insert key/value pair into node
-	  $config->{$option} = $this->_parse_value($config, $option, $value);
+          if($this->{ForceArray} && defined $value && $value =~ /^\[\s*(.+?)\s*\]$/) {
+            # force single value array entry
+            push @{$config->{$option}}, $this->_parse_value($config, $option, $1);
+          }
+          else {
+	    # standard config option, insert key/value pair into node
+	    $config->{$option} = $this->_parse_value($config, $option, $value);
 
-	  if ($this->{InterPolateVars}) {
-	    # save pair on local stack
-	    $config->{__stack}->{$option} = $config->{$option};
-	  }
+	    if ($this->{InterPolateVars}) {
+	      # save pair on local stack
+	      $config->{__stack}->{$option} = $config->{$option};
+	    }
+          }
 	}
       }
     }
@@ -932,13 +959,12 @@ sub _parse {
 	    }
 	  }
 	  else {
-	    # the first occurence of this particular named block
+	    # the first occurrence of this particular named block
 	    my $tmphash = $this->_hashref();
 
 	    if ($this->{InterPolateVars}) {
 	      # inherit current __stack to new block
 	      $tmphash->{__stack} = $this->_copy($config->{__stack});
-	      #$tmphash->{__stack} = $config->{$block}->{__stack};
 	    }
 
 	    $config->{$block}->{$blockname} = $this->_parse($tmphash, \@newcontent);
@@ -987,7 +1013,7 @@ sub _parse {
 	    }
 	  }
 	  else {
-	    # the first occurence of this particular block
+	    # the first occurrence of this particular block
 	    my $tmphash = $this->_hashref();
 
 	    if ($this->{InterPolateVars}) {
@@ -1039,9 +1065,19 @@ sub _parse_value {
   #
   my($this, $config, $option, $value) =@_;
 
+  my $cont;
+  ($cont, $option, $value) = $this->_hook('pre_parse_value', $option, $value);
+  return $value if(!$cont);
+
   # avoid "Use of uninitialized value"
   if (! defined $value) {
-    $value = undef; # bigfix rt.cpan.org#42721  q();
+    # patch fix rt#54583
+    # Return an input undefined value without trying transformations
+    return $value;
+  }
+
+  if($this->{NormalizeValue}) {
+    $value = $this->{NormalizeValue}($value);
   }
 
   if ($this->{InterPolateVars}) {
@@ -1073,8 +1109,30 @@ sub _parse_value {
       $value = \%__flags;
     }
   }
+
+  if (!$this->{NoEscape}) {
+    # are there any escaped characters left? put them out as is
+    $value =~ s/\\([\$\\\"#])/$1/g;
+  }
+
+  ($cont, $option, $value) = $this->_hook('post_parse_value', $option, $value);
+  
   return $value;
 }
+
+
+
+sub _hook {
+  my ($this, $hook, @arguments) = @_;
+  if(exists $this->{Plug}->{$hook}) {
+    my $sub = $this->{Plug}->{$hook};
+    my @hooked = &$sub(@arguments);
+    return @hooked;
+  }
+  return (1, @arguments);
+}
+
+
 
 
 
@@ -1087,7 +1145,7 @@ sub NoMultiOptions {
   # Since we do parsing from within new(), we must
   # call it again if one turns NoMultiOptions on!
   #
-  croak q(Config::Genera: lThe NoMultiOptions() method is deprecated. Set 'AllowMultiOptions' to 'no' instead!);
+  croak q(Config::General: The NoMultiOptions() method is deprecated. Set 'AllowMultiOptions' to 'no' instead!);
 }
 
 
@@ -1126,7 +1184,7 @@ sub save_file {
   }
   else {
     if ($this->{UTF8}) {
-      $fh = new IO::File;
+      $fh = IO::File->new;
       open($fh, ">:utf8", $file)
 	or croak "Config::General: Could not open $file in UTF8 mode!($!)\n";
     }
@@ -1193,14 +1251,14 @@ sub _store {
 
   my $config_string = q();
 
-  if($this->{SaveSorted}) {
-    # ahm, well this might look strange because the two loops
-    # are obviously the same, but I don't know how to call
-    # a foreach() with sort and without sort() on the same
-    # line (I think it's impossible)
-    foreach my $entry (sort keys %{$config}) {
-      if (ref($config->{$entry}) eq 'ARRAY') {
-        foreach my $line (sort @{$config->{$entry}}) {
+  foreach my $entry ( $this->{SaveSorted} ? sort keys %$config : keys %$config ) {
+    if (ref($config->{$entry}) eq 'ARRAY') {
+      if( $this->{ForceArray} && scalar @{$config->{$entry}} == 1 && ! ref($config->{$entry}->[0]) ) {
+        # a single value array forced to stay as array
+        $config_string .= $this->_write_scalar($level, $entry, '[' . $config->{$entry}->[0] . ']');
+      }
+      else {
+        foreach my $line ( $this->{SaveSorted} ? sort @{$config->{$entry}} : @{$config->{$entry}} ) {
           if (ref($line) eq 'HASH') {
             $config_string .= $this->_write_hash($level, $entry, $line);
           }
@@ -1208,33 +1266,13 @@ sub _store {
             $config_string .= $this->_write_scalar($level, $entry, $line);
           }
         }
-      }
-      elsif (ref($config->{$entry}) eq 'HASH') {
-        $config_string .= $this->_write_hash($level, $entry, $config->{$entry});
-      }
-      else {
-        $config_string .= $this->_write_scalar($level, $entry, $config->{$entry});
       }
     }
-  }
-  else {
-    foreach my $entry (keys %{$config}) {
-      if (ref($config->{$entry}) eq 'ARRAY') {
-        foreach my $line (@{$config->{$entry}}) {
-          if (ref($line) eq 'HASH') {
-            $config_string .= $this->_write_hash($level, $entry, $line);
-          }
-          else {
-            $config_string .= $this->_write_scalar($level, $entry, $line);
-          }
-        }
-      }
-      elsif (ref($config->{$entry}) eq 'HASH') {
-        $config_string .= $this->_write_hash($level, $entry, $config->{$entry});
-      }
-      else {
-        $config_string .= $this->_write_scalar($level, $entry, $config->{$entry});
-      }
+    elsif (ref($config->{$entry}) eq 'HASH') {
+      $config_string .= $this->_write_hash($level, $entry, $config->{$entry});
+    }
+    else {
+      $config_string .= $this->_write_scalar($level, $entry, $config->{$entry});
     }
   }
 
@@ -1253,14 +1291,18 @@ sub _write_scalar {
 
   my $config_string;
 
-  if ($line =~ /\n/ || $line =~ /\\$/) {
+  # patch fix rt#54583
+  if ( ! defined $line ) {
+    $config_string .= $indent . $entry . "\n";
+  }
+  elsif ($line =~ /\n/ || $line =~ /\\$/) {
     # it is a here doc
     my $delimiter;
     my $tmplimiter = 'EOF';
     while (!$delimiter) {
       # create a unique here-doc identifier
       if ($line =~ /$tmplimiter/s) {
-	$tmplimiter .= q(%);
+	$tmplimiter .= '%';
       }
       else {
 	$delimiter = $tmplimiter;
@@ -1275,7 +1317,12 @@ sub _write_scalar {
   }
   else {
     # a simple stupid scalar entry
-    $line =~ s/#/\\#/g;
+
+    if (!$this->{NoEscape}) {
+      # re-escape contained $ or # or \ chars
+      $line =~ s/([#\$\\\"])/\\$1/g;
+    }
+
     # bugfix rt.cpan.org#42287
     if ($line =~ /^\s/ or $line =~ /\s$/) {
       # need to quote it
@@ -1302,6 +1349,20 @@ sub _write_hash {
     $entry = q(") . $entry . q(");
   }
 
+  # check if the next level key points to a hash and is the only one
+  # in this case put out a named block
+  # fixes rt.77667
+  my $num = scalar keys %{$line};
+  if($num == 1) {
+    my $key = (keys %{$line})[0];
+    if(ref($line->{$key}) eq 'HASH') {
+      $config_string .= $indent . qq(<$entry $key>\n);
+      $config_string .= $this->_store($level + 1, $line->{$key});
+      $config_string .= $indent . qq(</) . $entry . ">\n";
+      return $config_string;
+    }
+  }
+ 
   $config_string .= $indent . q(<) . $entry . ">\n";
   $config_string .= $this->_store($level + 1, $line);
   $config_string .= $indent . q(</) . $entry . ">\n";
@@ -1403,7 +1464,7 @@ Config::General - Generic Config Module
  #
  # the OOP way
  use Config::General;
- $conf = new Config::General("rcfile");
+ $conf = Config::General->new("rcfile");
  my %config = $conf->getall;
 
  #
@@ -1433,11 +1494,11 @@ C-style comments or multiline options.
 
 Possible ways to call B<new()>:
 
- $conf = new Config::General("rcfile");
+ $conf = Config::General->new("rcfile");
 
- $conf = new Config::General(\%somehash);
+ $conf = Config::General->new(\%somehash);
 
- $conf = new Config::General( %options ); # see below for description of possible options
+ $conf = Config::General->new( %options ); # see below for description of possible options
 
 
 This method returns a B<Config::General> object (a hash blessed into "Config::General" namespace.
@@ -1613,7 +1674,7 @@ The following values will be considered as B<false>:
 
  no, off, 0, false
 
-This effect is case-insensitive, i.e. both "Yes" or "oN" will result in 1.
+This effect is case-insensitive, i.e. both "Yes" or "No" will result in 1.
 
 
 =item B<-FlagBits>
@@ -1629,7 +1690,7 @@ Multiple flags can be used, separated by the pipe character |.
 
 Well, an example will clarify things:
 
- my $conf = new Config::General(
+ my $conf = Config::General->new(
          -ConfigFile => "rcfile",
          -FlagBits => {
               Mode => {
@@ -1697,6 +1758,9 @@ This can be a hash reference or a simple scalar (string) of a config. This
 causes the module to preset the resulting config hash with the given values,
 which allows you to set default values for particular config options directly.
 
+Note that you probably want to use this with B<-MergeDuplicateOptions>, otherwise
+a default value already in the configuration file will produce an array of two
+values.
 
 =item B<-Tie>
 
@@ -1742,6 +1806,11 @@ configs.
 
 This implies B<-InterPolateVars>.
 
+=item B<-AllowSingleQuoteInterpolation>
+
+By default variables inside single quotes will not be interpolated. If
+you turn on this option, they will be interpolated as well.
+
 =item B<-ExtendedAccess>
 
 If set to a true value, you can use object oriented (extended) methods to
@@ -1769,7 +1838,7 @@ in a config file is the key and which one is the value. By default it tries
 its best to guess. That means you can mix equalsign assignments and whitespace
 assignments.
 
-However, somtime you may wish to make it more strictly for some reason. In
+However, sometime you may wish to make it more strictly for some reason. In
 this case you can set B<-SplitPolicy>. The possible values are: 'guess' which
 is the default, 'whitespace' which causes the module to split by whitespace,
 'equalsign' which causes it to split strictly by equal sign, or 'custom'. In the
@@ -1811,14 +1880,7 @@ By default B<-CComments> is turned on.
 
 =item B<-BackslashEscape>
 
-If you turn on this parameter, a backslash can be used to escape any special
-character within configurations.
-
-By default it is turned off.
-
-Be careful with this option, as it removes all backslashes after parsing.
-
-B<This option might be removed in future versions>.
+B<Deprecated Option>.
 
 =item B<-SlashIsDirectory>
 
@@ -1842,7 +1904,7 @@ you will get such an error message from the parser:
 This is caused by the fact that the config chunk below will be
 internally converted to:
 
- <Directory><Directory />
+ <Directory></Directory>
    Index index.awk
  </Directory>
 
@@ -1879,9 +1941,8 @@ The following options will be set:
  IncludeDirectories = 1
  IncludeGlob        = 1
  SlashIsDirectory   = 1
- SplitPolicy        = 'equalsign'
+ SplitPolicy        = 'whitespace'
  CComments          = 0
- BackslashEscape    = 1
 
 Take a look into the particular documentation sections what
 those options are doing.
@@ -1898,6 +1959,32 @@ not work properly with older versions of Perl.
 
 If you want to save configs in a sorted manner, turn this
 parameter on. It is not enabled by default.
+
+=item B<-NoEscape>
+
+If you want to use the data ( scalar or final leaf ) without escaping special character, turn this
+parameter on. It is not enabled by default.
+
+=item B<-NormalizeBlock>
+
+Takes a subroutine reference as parameter and gets the current
+block or blockname passed as parameter and is expected to return
+it in some altered way as a scalar string. The sub will be called
+before anything else will be done by the module itself (e.g. interpolation).
+
+Example:
+
+ -NormalizeBlock => sub { my $x = shift; $x =~ s/\s*$//; $x; }
+
+This removes trailing whitespaces of block names.
+
+=item B<-NormalizeOption>
+
+Same as B<-NormalizeBlock> but applied on options only.
+
+=item B<-NormalizeValue>
+
+Same as B<-NormalizeBlock> but applied on values only.
 
 =back
 
@@ -1921,7 +2008,7 @@ reference to a hash structure, if you set it. If you do not supply this second p
 then the internal config hash, which has already been parsed, will be
 used.
 
-Please note that any occurence of comments will be ignored by getall()
+Please note that any occurrence of comments will be ignored by getall()
 and thus be lost after you call this method.
 
 You need also to know that named blocks will be converted to nested blocks
@@ -2175,7 +2262,7 @@ for named blocks.
 
 
 
-=head1 IDENTICAL OPTIONS
+=head1 IDENTICAL OPTIONS (ARRAYS)
 
 You may have more than one line of the same option with different values.
 
@@ -2250,7 +2337,16 @@ by setting the flag I<AllowMultiOptions> in the B<new()> method to "no".
 If turned off, Config::General will complain about multiple occurring options
 with identical names!
 
+=head2 FORCE SINGLE VALUE ARRAYS
 
+You may also force a single config line to get parsed into an array by
+turning on the option B<-ForceArray> and by surrounding the value of the
+config entry by []. Example:
+
+ hostlist = [ foo.bar ]
+
+Will be a singlevalue array entry if the option is turned on. If you want
+it to remain to be an array you have to turn on B<-ForceArray> during save too.
 
 =head1 LONG LINES
 
@@ -2271,7 +2367,7 @@ command will become:
 =head1 HERE DOCUMENTS
 
 You can also define a config value as a so called "here-document". You must tell
-the module an identifier which idicates the end of a here document. An
+the module an identifier which indicates the end of a here document. An
 identifier must follow a "<<".
 
 Example:
@@ -2313,7 +2409,7 @@ line inside the here-document.
 
 =head1 INCLUDES
 
-You can include an external file at any posision in your config file using the following statement
+You can include an external file at any position in your config file using the following statement
 in your config file:
 
  <<include externalconfig.rc>>
@@ -2421,6 +2517,121 @@ the number sign as the begin of a comment because of the leading backslash.
 Inside here-documents escaping of number signs is NOT required!
 
 
+=head1 PARSER PLUGINS
+
+You can alter the behavior of the parser by supplying closures
+which will be called on certain hooks during config file processing
+and parsing.
+
+The general aproach works like this:
+
+ sub ck {
+  my($file, $base) = @_;
+  print "_open() tries $file ... ";
+  if($file =~ /blah/) {
+    print "ignored\n";
+    return (0);
+  }
+  else {
+    print "allowed\n";
+    return (1, @_);
+  }
+ }
+ 
+ my %c = ParseConfig(
+              -IncludeGlob => 1,
+              -UseApacheInclude => 1,
+              -ConfigFile => shift,
+              -Plug => { pre_open => *ck }
+ );
+ 
+Output:
+
+ _open() tries cfg ... allowed
+ _open() tries x/*.conf ... allowed
+ _open() tries x/1.conf ... allowed
+ _open() tries x/2.conf ... allowed
+ _open() tries x/blah.conf ... ignored
+
+As you can see, we wrote a little sub which takes a filename
+and a base directory as parameters. We tell Config::General via
+the B<Plug> parameter of B<new()> to call this sub everytime
+before it attempts to open a file.
+
+General processing continues as usual if the first value of
+the returned array is true. The second value of that array
+depends on the kind of hook being called.
+
+The following hooks are available so far:
+
+=over
+
+=item B<pre_open>
+
+Takes two parameters: filename and basedirectory.
+
+Has to return an array consisting of 3 values:
+
+ - 1 or 0 (continue processing or not)
+ - filename
+ - base directory
+
+=item B<pre_read>
+
+Takes two parameters: the filehandle of the file to be read
+and an array containing the raw contents of said file.
+
+This hook will be applied in _read(). File contents are already
+available at this stage, comments will be removed, here-docs normalized
+and the like. This hook gets the unaltered, original contents.
+
+Has to return an array of 3 values:
+
+ - 1 or 0 (continue processing or not)
+ - the filehandle
+ - an array of strings
+
+You can use this hook to apply your own normalizations or whatever.
+
+Be careful when returning the abort value (1st value of returned array 0),
+since in this case nothing else would be done on the contents. If it still
+contains comments or something, they will be parsed as legal config options.
+
+=item B<post_read>
+
+Takes one parameter: a reference to an array containing the prepared
+config lines (after being processed by _read()).
+
+This hook will be applied in _read() when everything else has been done.
+
+Has to return an array of 2 values:
+
+ - 1 or 0 (continue processing or not) [Ignored for post hooks]
+ - a reference to an array containing the config lines
+
+=item B<pre_parse_value>
+
+Takes 2 parameters: an option name and its value.
+
+This hook will be applied in _parse_value() before any processing.
+
+Has to return an array of 3 values:
+
+ - 1 or 0 (continue processing or not)
+ - option name
+ - value of the option
+
+=item B<post_parse_value>
+
+Almost identical to pre_parse_value, but will be applied after _parse_value()
+is finished and all usual processing and normalization is done.
+
+=back
+
+Not implemented yet: hooks for variable interpolation and block
+parsing.
+
+
 =head1 OBJECT ORIENTED INTERFACE
 
 There is a way to access a parsed config the OO-way.
@@ -2502,7 +2713,7 @@ I recommend you to read the following documents, which are supplied with Perl:
 
 =head1 LICENSE AND COPYRIGHT
 
-Copyright (c) 2000-2009 Thomas Linden
+Copyright (c) 2000-2013 Thomas Linden
 
 This library is free software; you can redistribute it and/or
 modify it under the same terms as Perl itself.
@@ -2531,7 +2742,7 @@ Thomas Linden <tlinden |AT| cpan.org>
 
 =head1 VERSION
 
-2.44
+2.52
 
 =cut
 

@@ -1,14 +1,24 @@
-# http://module-build.sourceforge.net/META-spec.html
-#XXXXXXX This is a prototype!!!  It will change in the future!!! XXXXX#
-name:         Config-General
-version:      2.42
-version_from: General.pm
-installdirs:  site
+--- #YAML:1.0
+name:               Config-General
+version:            2.52
+abstract:           ~
+author:  []
+license:            perl
+distribution_type:  module
+configure_requires:
+    ExtUtils::MakeMaker:  0
+build_requires:
+    ExtUtils::MakeMaker:  0
 requires:
-    File::Glob:                    0
-    File::Spec::Functions:         0
-    FileHandle:                    0
-    IO::File:                      0
-
-distribution_type: module
-generated_by: ExtUtils::MakeMaker version 6.30
+    File::Glob:           0
+    File::Spec::Functions:  0
+    FileHandle:           0
+    IO::File:             0
+no_index:
+    directory:
+        - t
+        - inc
+generated_by:       ExtUtils::MakeMaker version 6.57_05
+meta-spec:
+    url:      http://module-build.sourceforge.net/META-spec-v1.4.html
+    version:  1.4
